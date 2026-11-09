@@ -1,5 +1,4 @@
 ---
-
 name: task-design
 description: Проектирование задач
 ---
