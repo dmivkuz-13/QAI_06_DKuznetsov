@@ -1,6 +1,8 @@
+import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from evaluator import evaluate_response
@@ -17,6 +19,78 @@ dataset_path = (
         / "dataset"
         / "golden_dataset.json"
 )
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Запуск Eval Cases для QA Agent."
+    )
+
+    parser.add_argument(
+        "cases",
+        nargs="*",
+        metavar="CASE_ID",
+        help=(
+            "ID конкретного Eval Case (например, EVC-003). "
+            "Если не указан — запускаются все Eval Cases датасета."
+        )
+    )
+
+    return parser.parse_args()
+
+
+def load_eval_cases():
+    if not dataset_path.exists():
+        raise RuntimeError(
+            f"Не найден датасет: {dataset_path}"
+        )
+
+    content = dataset_path.read_text(encoding="utf-8").strip()
+
+    # Пустой датасет — это не ошибка, просто нет кейсов.
+    if not content:
+        return []
+
+    cases = json.loads(content)
+
+    if not isinstance(cases, list):
+        raise RuntimeError(
+            f"Датасет {dataset_path.name} должен содержать JSON-массив"
+        )
+
+    return cases
+
+
+def select_eval_cases(cases, case_ids):
+    """Оставляет только запрошенные кейсы, сохраняя порядок датасета."""
+
+    if not case_ids:
+        return cases
+
+    known_ids = {
+        case["id"]
+        for case in cases
+    }
+
+    missing_ids = [
+        case_id
+        for case_id in case_ids
+        if case_id not in known_ids
+    ]
+
+    if missing_ids:
+        raise RuntimeError(
+            f"Eval Case не найден: {', '.join(missing_ids)}. "
+            f"Доступные кейсы: {', '.join(sorted(known_ids))}"
+        )
+
+    requested_ids = set(case_ids)
+
+    return [
+        case
+        for case in cases
+        if case["id"] in requested_ids
+    ]
 
 
 # =============================================================
@@ -37,19 +111,47 @@ MAX_ERRORS = 0
 
 
 # =============================================================
-# ЗАГРУЗКА GOLDEN DATASET
+# ЗАГРУЗКА DATASET
 # =============================================================
 
-with open(
-        dataset_path,
-        "r",
-        encoding="utf-8"
-) as file:
+args = parse_args()
 
-    eval_cases = json.load(file)
+
+eval_cases = []
+
+
+try:
+
+    eval_cases = select_eval_cases(
+        load_eval_cases(),
+        args.cases
+    )
+
+except RuntimeError as error:
+
+    print(error)
+    print("Запуск остановлен.")
+
+    sys.exit(1)
+
+
+if not eval_cases:
+
+    print(
+        "Не найдено ни одного Eval Case. "
+        "Запуск остановлен."
+    )
+
+    sys.exit(1)
 
 
 eval_results = []
+
+
+# Placeholder для кейсов без конкретной страницы требований.
+# Все кейсы golden-датасета содержат конкретный pageId,
+# поэтому кейс с placeholder считается ошибкой конфигурации.
+ANY_PAGE_ID = "ANY"
 
 
 # =============================================================
@@ -74,7 +176,20 @@ for eval_case in eval_cases:
         )
 
 
-    page_id = eval_input["page_id"]
+    raw_page_id = str(
+        eval_input.get("page_id", "")
+    ).strip()
+
+
+    if not raw_page_id or raw_page_id == ANY_PAGE_ID:
+
+        raise RuntimeError(
+            f"Eval Case {eval_case['id']} не содержит "
+            f"конкретного input.page_id."
+        )
+
+
+    page_id = raw_page_id
 
 
     if page_id not in cases_by_page:
@@ -103,8 +218,8 @@ for page_id, page_eval_cases in cases_by_page.items():
     print(f"pageId: {page_id}")
 
     print(
-        f"Количество Eval Cases для этой страницы: "
-        f"{len(page_eval_cases)}"
+        f"Eval Cases для этой страницы: "
+        f"{', '.join(ec['id'] for ec in page_eval_cases)}"
     )
 
     print()
@@ -127,19 +242,68 @@ for page_id, page_eval_cases in cases_by_page.items():
             primary_instruction = instr
             break
 
+
+    # E2E-кейсы проверяют весь пайплайн: без явной инструкции
+    # агент работает по своим правилам (оркестратор + субагенты).
+    if not primary_instruction:
+        primary_instruction = (
+            "Выполни полный пайплайн работы с этими требованиями "
+            "штатно, в соответствии со своими инструкциями."
+        )
+
+
+    # Универсальные E2E-кейсы могут задавать проекты создания
+    # сущностей — они не связаны с конкретной страницей требований.
+    jira_project = next(
+        (
+            ec["input"]["jira_project"]
+            for ec in page_eval_cases
+            if ec["input"].get("jira_project")
+        ),
+        ""
+    )
+
+    qase_project = next(
+        (
+            ec["input"]["qase_project"]
+            for ec in page_eval_cases
+            if ec["input"].get("qase_project")
+        ),
+        ""
+    )
+
+
+    project_instruction = ""
+
+    if jira_project or qase_project:
+
+        parts = []
+
+        if jira_project:
+            parts.append(f"Jira (проект {jira_project})")
+
+        if qase_project:
+            parts.append(f"Qase (проект {qase_project})")
+
+        project_instruction = (
+            f"Проекты для создания сущностей: "
+            f"{', '.join(parts)}. "
+        )
+
+
     prompt = (
         f"Получи требования из Confluence "
         f"со страницы pageId={page_id}. "
-        f"(сайт https://nikitaperson19.atlassian.net). "
-        f"Вызови getConfluencePage с этими параметрами. "
+        f"Вызови confluence_get_page с этими параметрами. "
+        f"{project_instruction}"
         f"{primary_instruction} "
         f"Обязательный формат ответа: только валидный JSON без markdown-обёрток. "
         f"В JSON должны быть поля: source (page_id, title, version, read_status), "
         f"quality_gate (verdict: PASS или FAIL, blocking_items), "
-        f"jira (created), testomat (tests_created), artifacts, open_questions. "
+        f"jira (created), qase (tests_created), artifacts, open_questions. "
         f"Если требований на странице нет — верни JSON с полем "
-        f"status=\"no_content_to_process\", пустыми jira.created и testomat.tests_created, "
-        f"и не вызывай инструменты Jira и Testomat."
+        f"status=\"no_content_to_process\", пустыми jira.created и qase.tests_created, "
+        f"и не вызывай инструменты Jira и Qase."
     )
 
 
@@ -150,12 +314,18 @@ for page_id, page_eval_cases in cases_by_page.items():
     prompt_file = project_path / "evals" / ".tmp_prompt.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
 
+
+    # Фиксируем время старта прогона: по нему Evaluator проверяет,
+    # что артефакты созданы/обновлены именно в этом прогоне.
+    run_started_at = time.time()
+
+
     process = subprocess.Popen(
         [
             "opencode",
             "run",
             "-m",
-            "cloudru/deepseek-ai/DeepSeek-V4-Flash",
+            "llm-router-org/deepseek-v4-flash",
             "--format",
             "json",
             str(prompt_file)
@@ -365,7 +535,6 @@ for page_id, page_eval_cases in cases_by_page.items():
 
     # Один фактический Agent Response
     # проверяется всеми Eval Cases этой страницы.
-
     for eval_case in page_eval_cases:
 
         print()
@@ -393,7 +562,9 @@ for page_id, page_eval_cases in cases_by_page.items():
 
             evaluation_result = evaluate_response(
                 eval_case,
-                agent_response
+                agent_response,
+                page_id=page_id,
+                run_started_at=run_started_at
             )
 
 

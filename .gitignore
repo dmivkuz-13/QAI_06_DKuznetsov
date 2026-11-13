@@ -3,3 +3,6 @@
 /workspace.xml
 .env
 .secrets
+/node_modules/*
+package-lock.json
+package.json

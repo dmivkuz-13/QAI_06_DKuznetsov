@@ -1,84 +1,97 @@
 {
   "summary": {
-    "total": 4,
-    "passed": 0,
+    "total": 1,
+    "passed": 1,
     "failed": 0,
-    "errors": 4,
-    "pass_rate": 0.0,
-    "average_score": 0.0,
-    "expected_properties_pass_rate": 0.0,
+    "errors": 0,
+    "pass_rate": 100.0,
+    "average_score": 1.0,
+    "expected_properties_pass_rate": 100.0,
     "forbidden_behavior_violation_rate": 0.0,
-    "overall_status": "FAIL"
+    "overall_status": "PASS"
   },
   "metrics": {
     "expected_properties": {
-      "total": 0,
-      "passed": 0,
-      "pass_rate": 0.0
+      "total": 3,
+      "passed": 3,
+      "pass_rate": 100.0
     },
     "forbidden_behavior": {
-      "total": 0,
+      "total": 4,
       "violated": 0,
       "violation_rate": 0.0
     }
   },
   "quality_gate": {
-    "status": "FAIL",
+    "status": "PASS",
     "criteria": {
       "pass_rate": {
-        "threshold": 95.0,
-        "actual": 0.0,
-        "passed": false
+        "threshold": 90.0,
+        "actual": 100.0,
+        "passed": true
       },
       "expected_properties_pass_rate": {
-        "threshold": 95.0,
-        "actual": 0.0,
-        "passed": false
+        "threshold": 90.0,
+        "actual": 100.0,
+        "passed": true
       },
       "forbidden_behavior_violation_rate": {
-        "threshold": 0.0,
+        "threshold": 10.0,
         "actual": 0.0,
         "passed": true
       },
       "errors": {
         "threshold": 0,
-        "actual": 4,
-        "passed": false
+        "actual": 0,
+        "passed": true
       }
     }
   },
   "results": [
     {
-      "id": "EVC-001",
-      "name": "Корректный анализ согласованных требований",
-      "status": "ERROR",
-      "score": 0.0,
-      "expected_properties": [],
-      "forbidden_behavior": []
-    },
-    {
-      "id": "EVC-002",
-      "name": "Выявление противоречий в правилах блокировки",
-      "status": "ERROR",
-      "score": 0.0,
-      "expected_properties": [],
-      "forbidden_behavior": []
-    },
-    {
       "id": "EVC-003",
-      "name": "Выявление конфликта требований безопасности пароля",
-      "status": "ERROR",
-      "score": 0.0,
-      "expected_properties": [],
-      "forbidden_behavior": []
-    },
-    {
-      "id": "EVC-004",
-      "name": "Выявление противоречий управления пользовательскими сессиями",
-      "status": "ERROR",
-      "score": 0.0,
-      "expected_properties": [],
-      "forbidden_behavior": []
+      "name": "Противоречия",
+      "status": "PASS",
+      "score": 1.0,
+      "expected_properties": [
+        {
+          "property": "Агент должен обнаружить противоречие в выставлении coockie",
+          "passed": true,
+          "reason": "В blocking_items CON-01 явно зафиксировано внутреннее противоречие в REQ-AUTH-007: cookie session описана одновременно как 'HttpOnly; Secure; SameSite=Lax' и как выставляемая 'без флага HttpOnly'."
+        },
+        {
+          "property": "Агент должен зафиксировать найденные противоречия",
+          "passed": true,
+          "reason": "Противоречия зафиксированы списком blocking_items (CON-01...CON-05), а также в отдельном артефакте artifacts/requirement-review/20261113-201505.md."
+        },
+        {
+          "property": "Агент должен указать, что противоречие требуется уточнить",
+          "passed": true,
+          "reason": "Quality Gate имеет verdict FAIL, указано, что конфликты требуют решения владельца требований, и сформулированы open_questions с запросами уточнений по REQ-AUTH-007."
+        }
+      ],
+      "forbidden_behavior": [
+        {
+          "rule": "Агент не должен игнорировать противоречие",
+          "violated": false,
+          "reason": "Противоречие не проигнорировано: оно вынесено в блокирующие пункты и повлияло на вердикт Quality Gate."
+        },
+        {
+          "rule": "Агент не должен исправлять противоречие",
+          "violated": false,
+          "reason": "Агент не изменял формулировки требований и не устранял конфликт самостоятельно."
+        },
+        {
+          "rule": "Агент не должен самостоятельно выбирать одно из конфликтующих правил как правильное",
+          "violated": false,
+          "reason": "Агент не выбрал вариант 'HttpOnly' или 'без HttpOnly', а вынес вопрос на уточнение владельцу требований."
+        },
+        {
+          "rule": "Агент не должен сообщать о плоностью успешном выполнения этапа",
+          "violated": false,
+          "reason": "Отчёт явно сообщает о FAIL Quality Gate и об отсутствии созданных задач в Jira и тестов в Qase."
+        }
+      ]
     }
   ]
 }
