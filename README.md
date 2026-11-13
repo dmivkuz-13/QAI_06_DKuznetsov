@@ -20,7 +20,7 @@ QAI_06_DKuznetsov/
 ├── package.json                     # Зависимости (opencode plugin)
 ├── .opencode/
 │   ├── agents/                      # Описание агентов
-│   │   ├── orchestrator.md          #   Оркестратор пайплайна
+│   │   ├── orchestrator.md          #   Оркестратор пайплайна (primary)
 │   │   ├── requirement-reviewer.md  #   Анализ требований (subagent)
 │   │   ├── task-designer.md         #   Создание задач в Jira (subagent)
 │   │   └── test-designer.md         #   Тест-модель в Qase (subagent)
@@ -28,14 +28,14 @@ QAI_06_DKuznetsov/
 │   │   ├── requirement-review/      #   Skill анализа требований
 │   │   ├── task-design/             #   Skill проектирования задач
 │   │   └── test-design/             #   Skill тест-дизайна
-│   └── plugins/
-│       ├── confluence/index.ts      # Плагин: получение страницы Confluence
-│       └── pii-scanner.ts           # Плагин: поиск и маскирование PII
+│   ├── plugins/
+│   │   └── confluence/index.ts      # Плагин: получение страницы Confluence
+│   └── validators/
+│       └── validate.py              # Валидация Security Review Artifact (JSON Schema + Pydantic)
 ├── artifacts/                       # Artifacts этапов (взаимосвязь результатов)
 │   ├── requirement-review/          #   Анализ требований
 │   ├── jira-tasks/                  #   Задачи Jira
-│   ├── test-model/                  #   Тест-модель Qase
-│   └── pipeline-report/             #   Итоговый отчёт пайплайна
+│   └── test-model/                  #   Тест-модель Qase
 └── evals/                           # Оценка качества агента
     ├── eval_runner.py               #   Запуск Eval Cases
     ├── evaluator.py                 #   Проверка Expected/Forbidden свойств
@@ -69,14 +69,16 @@ Confluence ──► [requirement-reviewer] ──► Requirement Review Artifac
 ```
 
 - Этапы 2 и 3 (Jira и Qase) независимы друг от друга, но оба зависят от успешного прохождения Quality Gate 1 (анализ требований).
-- Результаты этапов передаются через Artifacts по фиксированным путям `/artifacts/<artifact_name>/<version>.md`, а не через историю диалога.
+- Результаты этапов передаются через Artifacts по фиксированным путям `/artifacts/<artifact_name>/<artifact_version_time>.md`, а не через историю диалога.
 - Каждый этап имеет свой Quality Gate (Gate 1–3). Пайплайн считается выполненным только после прохождения всех трёх.
 
 ## Требования к окружению
 
-- **Python 3.12+** — для запуска Eval-набора (`evals/`).
+- **Python 3.12+** — для запуска Eval-набора (`evals/`) и валидатора (`.opencode/validators/`).
 - **Node.js / npm** — для плагинов OpenCode и пакета `@opencode/plugin`.
-- **OpenCode CLI** — для запуска агента (используется в `eval_runner.py`).
+- **OpenCode CLI** — для запуска агента (используется в `eval_runner.py` и `evaluator.py`).
+- **Python-пакеты** — `pydantic` и `jsonschema` (для `.opencode/validators/validate.py`).
+- **Модель** — в OpenCode должна быть доступна модель `llm-router-org/deepseek-v4-flash`: она используется и для прогона агента, и для LLM-судьи (`eval_runner.py`/`evaluator.py`).
 
 ### Переменные окружения
 
@@ -95,8 +97,8 @@ Confluence ──► [requirement-reviewer] ──► Requirement Review Artifac
 # Установить зависимости npm (плагины OpenCode)
 npm install
 
-# Установить зависимости Python для evals
-pip install -r requirements.txt   # при наличии
+# Установить зависимости Python для валидатора артефактов
+pip install pydantic jsonschema
 ```
 
 ## Запуск Eval-набора
@@ -117,6 +119,22 @@ python evals/eval_runner.py EVC-002 EVC-003
 Ключевые параметры:
 
 - `CASE_ID` — один или несколько идентификаторов Eval Cases (например, `EVC-003`). Если не указан, запускаются все кейсы датасета. Кейсы, относящиеся к одной странице Confluence, выполняются за один запуск агента. При указании несуществующего ID запуск останавливается со списком доступных кейсов.
+
+### Как работает оценивание
+
+- **генерация ответа** — агент запускается через `opencode run` с промптом по `page_id` из Eval Case; всё, что относится к одной странице Confluence, выполняется одним прогоном.
+- **LLM-as-a-Judge** — `evaluator.py` передаёт фактический ответ агента независимому судье вместе со списком Expected Properties и Forbidden Behavior и получает оценку по каждому пункту.
+- **детерминированные проверки артефактов** — для кейсов с `artifact_checks` дополнительно проверяется по `mtime`, что каталоги `artifacts/requirement-review`, `artifacts/jira-tasks`, `artifacts/test-model` созданы или обновлены в текущем прогоне (обязательные, провал → `FAIL`), а `artifacts/pipeline-report` — опциональный и только фиксируется.
+- Expected Properties и Forbidden Behavior агенту при запуске не передаются.
+
+### Датасет Eval Cases
+
+| ID | Проверяемая способность |
+| --- | --- |
+| `EVC-001` | E2E: полный пайплайн (анализ требований → Jira → Qase) |
+| `EVC-002` | Корректная обработка неоднозначностей в требованиях |
+| `EVC-003` | Корректная обработка противоречий в требованиях |
+| `EVC-004` | Устойчивость к prompt injection |
 
 ### Качество прогона
 
@@ -141,7 +159,19 @@ python evals/eval_runner.py EVC-002 EVC-003
 | Jira Tasks Artifact | `task-designer` | Этап создания задач через Jira Tool |
 | Test Model Artifact | `test-designer` | Этап создания тестовых сущностей через Qase Tool |
 
-Artifacts хранятся по фиксированному пути `/artifacts/<artifact_name>/<version>.md`. При обновлении создаётся новая версия, старые версии не удаляются. Содержимое Artifact проверяется по соответствующему Quality Gate перед передачей на следующий этап.
+Artifacts хранятся по фиксированному пути `/artifacts/<artifact_name>/<artifact_version_time>.md` (например, `artifacts/requirement-review/20261113-204123.md`). При обновлении создаётся новая версия, старые версии не удаляются. Содержимое Artifact проверяется по соответствующему Quality Gate перед передачей на следующий этап.
+
+Итоговый отчёт пайплайна формируется оркестратором для пользователя; каталог `artifacts/pipeline-report` создаётся только при необходимости и в Eval-наборе проверяется как опциональный.
+
+### Валидация артефактов
+
+`.opencode/validators/validate.py` проверяет Security Review Artifact (`artifacts/security-review.json`) по контракту `.opencode/schemas/security-schema.json` — одновременно через JSON Schema (`jsonschema`) и строгую Pydantic-модель. Результат: `PASS` либо `BLOCKED` (код возврата `1`).
+
+```bash
+python .opencode/validators/validate.py
+```
+
+> Валидатор ожидает файлы `security-schema.json` и `security-review.json`; они должны присутствовать до запуска.
 
 ## Правила и ограничения
 
@@ -158,6 +188,7 @@ Artifacts хранятся по фиксированному пути `/artifact
 - `AGENTS.md` — основная инструкция QA-агента: роль, scope, workflow, Quality Gates, обработка ошибок.
 - `.opencode/agents/` — описания агентов пайплайна.
 - `.opencode/skills/` — скиллы этапов: `requirement-review`, `task-design`, `test-design`.
-- `.opencode/plugins/` — плагины OpenCode: интеграция с Confluence и PII-сканер.
+- `.opencode/plugins/` — плагины OpenCode: интеграция с Confluence.
+- `.opencode/validators/` — валидация артефактов безопасности.
 - `artifacts/` — промежуточные результаты этапов.
 - `evals/` — инфраструктура оценки качества агента.
