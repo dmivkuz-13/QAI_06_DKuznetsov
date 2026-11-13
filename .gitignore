@@ -2,4 +2,7 @@
 /shelf/
 /workspace.xml
 .env
-/evals/results/*
+.secrets
+/node_modules/*
+package-lock.json
+package.json
